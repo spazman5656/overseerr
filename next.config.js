@@ -21,4 +21,12 @@ module.exports = {
     scrollRestoration: true,
     largePageDataBytes: 256000,
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'http://localhost:5055/api/:path*',
+      },
+    ];
+  },
 };

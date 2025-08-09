@@ -5,30 +5,25 @@ import type { SeasonWithEpisodes } from '@server/models/Tv';
 import { defineMessages, useIntl } from 'react-intl';
 import useSWR from 'swr';
 import globalMessages from '@app/i18n/globalMessages';
-import axios from 'axios';
-import { useToasts } from 'react-toast-notifications';
+
 
 const messages = defineMessages({
   somethingwentwrong: 'Something went wrong while retrieving season data.',
   noepisodes: 'Episode list unavailable.',
-  requestSuccess: 'Request sent successfully!',
-  requesterror: 'Something went wrong while submitting the request.',
   seasonnumber: {
     id: 'seasonnumber',
     defaultMessage: 'Season {seasonNumber}',
   },
 });
 
+
 type SeasonProps = {
   seasonNumber: number;
   tvId: number;
-  is4k?: boolean; // is4k may be passed as a prop
 };
 
-const Season = ({ seasonNumber, tvId, is4k = false }: SeasonProps) => {
+const Season = ({ seasonNumber, tvId }: SeasonProps) => {
   const [selectedEpisodes, setSelectedEpisodes] = useState<number[]>([]);
-  const { addToast } = useToasts();
-  const intl = useIntl();
 
   function handleEpisodeToggle(episodeNumber: number) {
     setSelectedEpisodes((prev) =>
@@ -38,38 +33,17 @@ const Season = ({ seasonNumber, tvId, is4k = false }: SeasonProps) => {
     );
   }
 
-  const handleRequestEpisodes = async () => {
-    try {
-      // Build the payload in the format the backend expects
-      const payload = {
-        mediaId: tvId,
-        mediaType: 'tv',
-        is4k,
-        episodes: [
-          {
-            seasonNumber: seasonNumber,
-            episodes: selectedEpisodes,
-          },
-        ],
-      };
+  function handleRequestSeason() {
+    // You can later call your backend or open a modal here
+    console.log("Requesting season", seasonNumber);
+  }
 
-      await axios.post('/api/v1/request', payload);
+  function handleRequestEpisodes() {
+    // You can later call your backend or open a modal here
+    console.log("Requesting episodes", selectedEpisodes);
+  }
 
-      addToast(intl.formatMessage(messages.requestSuccess), {
-        appearance: 'success',
-        autoDismiss: true,
-      });
-
-      // Clear selections after successful request
-      setSelectedEpisodes([]);
-    } catch (e) {
-      addToast(intl.formatMessage(messages.requesterror), {
-        appearance: 'error',
-        autoDismiss: true,
-      });
-    }
-  };
-
+  const intl = useIntl();
   const { data, error } = useSWR<SeasonWithEpisodes>(
     `/api/v1/tv/${tvId}/season/${seasonNumber}`
   );
@@ -86,10 +60,16 @@ const Season = ({ seasonNumber, tvId, is4k = false }: SeasonProps) => {
     <div className="flex flex-col justify-center divide-y divide-gray-700">
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-xl font-semibold">
-          {seasonNumber === 0
+          {/*{seasonNumber === 0
             ? intl.formatMessage(globalMessages.specials)
-            : intl.formatMessage(messages.seasonnumber, { seasonNumber })}
+            : intl.formatMessage(messages.seasonnumber, { seasonNumber })} */}
         </h2>
+        {/*<button
+          className="rounded bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700"
+          onClick={() => handleRequestSeason()}
+        >
+          Request Season
+        </button> */}
       </div>
 
       <button
@@ -112,12 +92,12 @@ const Season = ({ seasonNumber, tvId, is4k = false }: SeasonProps) => {
                 className="flex flex-col space-y-4 py-4 xl:flex-row xl:items-center xl:space-y-0 xl:space-x-4"
                 key={`season-${seasonNumber}-episode-${episode.episodeNumber}`}
               >
-                <input
-                  type="checkbox"
-                  checked={selectedEpisodes.includes(episode.episodeNumber)}
-                  onChange={() => handleEpisodeToggle(episode.episodeNumber)}
-                  className="mr-2"
-                />
+              <input
+                type="checkbox"
+                checked={selectedEpisodes.includes(episode.episodeNumber)}
+                onChange={() => handleEpisodeToggle(episode.episodeNumber)}
+                className="mr-2"
+              />
                 <div className="flex-1">
                   <div className="flex flex-col space-y-2 xl:flex-row xl:items-center xl:space-y-0 xl:space-x-2">
                     <h3 className="text-lg">

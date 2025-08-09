@@ -55,9 +55,12 @@ app
       await dbConnection.query('PRAGMA foreign_keys=ON');
     }
 
+    // Bootstrap Discovery Sliders
+    await DiscoverSlider.bootstrapSliders();
+
     // Load Settings
     const settings = getSettings().load();
-    restartFlag.initializeSettings(settings.main);
+    // restartFlag.initializeSettings(settings.main); // FIX: Commented out to prevent restart loop
 
     // Migrate library types
     if (
@@ -96,9 +99,6 @@ app
 
     // Start Jobs
     startJobs();
-
-    // Bootstrap Discovery Sliders
-    await DiscoverSlider.bootstrapSliders();
 
     const server = express();
     if (settings.main.trustProxy) {

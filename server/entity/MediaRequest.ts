@@ -25,6 +25,7 @@ import {
 import Media from './Media';
 import SeasonRequest from './SeasonRequest';
 import { User } from './User';
+import { EpisodeRequest } from './EpisodeRequest';
 
 export class RequestPermissionError extends Error {}
 export class QuotaRestrictedError extends Error {}
@@ -121,7 +122,7 @@ export class MediaRequest {
         tmdbId: requestBody.mediaId,
         mediaType: requestBody.mediaType,
       },
-      relations: ['requests'],
+      relations: ['requests', 'requests.seasons', 'requests.seasons.episodes'],
     });
 
     if (!media) {
@@ -154,7 +155,6 @@ export class MediaRequest {
       .getMany();
 
     if (existing && existing.length > 0) {
-      // If there is an existing movie request that isn't declined, don't allow a new one.
       if (
         requestBody.mediaType === MediaType.MOVIE &&
         existing[0].status !== MediaRequestStatus.DECLINED &&
@@ -172,8 +172,6 @@ export class MediaRequest {
         );
       }
 
-      // If an existing auto-request for this media exists from the same user,
-      // don't allow a new one.
       if (
         existing.find(
           (r) => r.requestedBy.id === requestUser.id && r.isAutoRequest
@@ -192,7 +190,6 @@ export class MediaRequest {
         type: MediaType.MOVIE,
         media,
         requestedBy: requestUser,
-        // If the user is an admin or has the "auto approve" permission, automatically approve the request
         status: user.hasPermission(
           [
             requestBody.is4k
@@ -232,64 +229,80 @@ export class MediaRequest {
       await requestRepository.save(request);
       return request;
     } else {
-      const tmdbMediaShow = tmdbMedia as Awaited<
-        ReturnType<typeof tmdb.getTvShow>
-      >;
-      const requestedSeasons =
-        requestBody.seasons === 'all'
-          ? tmdbMediaShow.seasons
-              .filter((season) => season.season_number !== 0)
-              .map((season) => season.season_number)
-          : (requestBody.seasons as number[]);
-      let existingSeasons: number[] = [];
+      const requestedEpisodesBySeason = requestBody.episodes;
 
-      // We need to check existing requests on this title to make sure we don't double up on seasons that were
-      // already requested. In the case they were, we just throw out any duplicates but still approve the request.
-      // (Unless there are no seasons, in which case we abort)
-      if (media.requests) {
-        existingSeasons = media.requests
-          .filter(
-            (request) =>
-              request.is4k === requestBody.is4k &&
-              request.status !== MediaRequestStatus.DECLINED &&
-              request.status !== MediaRequestStatus.COMPLETED
-          )
-          .reduce((seasons, request) => {
-            const combinedSeasons = request.seasons.map(
-              (season) => season.seasonNumber
-            );
-
-            return [...seasons, ...combinedSeasons];
-          }, [] as number[]);
+      if (!requestedEpisodesBySeason || requestedEpisodesBySeason.length === 0) {
+        throw new Error('No seasons or episodes were provided in the request.');
       }
 
-      // We should also check seasons that are available/partially available but don't have existing requests
-      if (media.seasons) {
-        existingSeasons = [
-          ...existingSeasons,
-          ...media.seasons
-            .filter(
-              (season) =>
-                season[requestBody.is4k ? 'status4k' : 'status'] !==
-                  MediaStatus.UNKNOWN &&
-                season[requestBody.is4k ? 'status4k' : 'status'] !==
-                  MediaStatus.DELETED
-            )
-            .map((season) => season.seasonNumber),
-        ];
-      }
-
-      const finalSeasons = requestedSeasons.filter(
-        (rs) => !existingSeasons.includes(rs)
+      // FIX: Use nullish coalescing operator to provide a fallback empty array
+      const existingRequests = (media.requests ?? []).filter(
+        (request) =>
+          request.is4k === requestBody.is4k &&
+          request.status !== MediaRequestStatus.DECLINED &&
+          request.status !== MediaRequestStatus.COMPLETED
       );
 
-      if (finalSeasons.length === 0) {
-        throw new NoSeasonsAvailableError('No seasons available to request');
-      } else if (
-        quotas.tv.limit &&
-        finalSeasons.length > (quotas.tv.remaining ?? 0)
-      ) {
-        throw new QuotaRestrictedError('Series Quota exceeded.');
+      const newSeasonRequests: SeasonRequest[] = [];
+
+      for (const requestedSeason of requestedEpisodesBySeason) {
+        const seasonNumber = requestedSeason.seasonNumber;
+        const episodesToRequest = requestedSeason.episodes;
+
+        const existingEpisodesForSeason =
+          existingRequests
+            .flatMap((req) => req.seasons)
+            .find((season) => season.seasonNumber === seasonNumber)
+            ?.episodes.map((ep) => ep.episodeNumber) ?? [];
+
+        const finalEpisodes = episodesToRequest.filter(
+          (ep) => !existingEpisodesForSeason.includes(ep)
+        );
+
+        if (finalEpisodes.length > 0) {
+          const seasonRequest = new SeasonRequest({
+            seasonNumber: seasonNumber,
+            status: user.hasPermission(
+              [
+                requestBody.is4k
+                  ? Permission.AUTO_APPROVE_4K
+                  : Permission.AUTO_APPROVE,
+                requestBody.is4k
+                  ? Permission.AUTO_APPROVE_4K_TV
+                  : Permission.AUTO_APPROVE_TV,
+                Permission.MANAGE_REQUESTS,
+              ],
+              { type: 'or' }
+            )
+              ? MediaRequestStatus.APPROVED
+              : MediaRequestStatus.PENDING,
+            episodes: finalEpisodes.map(
+              (episodeNumber) =>
+                new EpisodeRequest({
+                  episodeNumber: episodeNumber,
+                  status: user.hasPermission(
+                    [
+                      requestBody.is4k
+                        ? Permission.AUTO_APPROVE_4K
+                        : Permission.AUTO_APPROVE,
+                      requestBody.is4k
+                        ? Permission.AUTO_APPROVE_4K_TV
+                        : Permission.AUTO_APPROVE_TV,
+                      Permission.MANAGE_REQUESTS,
+                    ],
+                    { type: 'or' }
+                  )
+                    ? MediaRequestStatus.APPROVED
+                    : MediaRequestStatus.PENDING,
+                })
+            ),
+          });
+          newSeasonRequests.push(seasonRequest);
+        }
+      }
+
+      if (newSeasonRequests.length === 0) {
+        throw new NoSeasonsAvailableError('No new episodes available to request');
       }
 
       await mediaRepository.save(media);
@@ -298,7 +311,6 @@ export class MediaRequest {
         type: MediaType.TV,
         media,
         requestedBy: requestUser,
-        // If the user is an admin or has the "auto approve" permission, automatically approve the request
         status: user.hasPermission(
           [
             requestBody.is4k
@@ -333,26 +345,7 @@ export class MediaRequest {
         rootFolder: requestBody.rootFolder,
         languageProfileId: requestBody.languageProfileId,
         tags: requestBody.tags,
-        seasons: finalSeasons.map(
-          (sn) =>
-            new SeasonRequest({
-              seasonNumber: sn,
-              status: user.hasPermission(
-                [
-                  requestBody.is4k
-                    ? Permission.AUTO_APPROVE_4K
-                    : Permission.AUTO_APPROVE,
-                  requestBody.is4k
-                    ? Permission.AUTO_APPROVE_4K_TV
-                    : Permission.AUTO_APPROVE_TV,
-                  Permission.MANAGE_REQUESTS,
-                ],
-                { type: 'or' }
-              )
-                ? MediaRequestStatus.APPROVED
-                : MediaRequestStatus.PENDING,
-            })
-        ),
+        seasons: newSeasonRequests,
         isAutoRequest: options.isAutoRequest ?? false,
       });
 
@@ -437,8 +430,6 @@ export class MediaRequest {
         if (value) {
           const finalValue = value.join(',');
 
-          // We want to keep the actual state of an "empty array" so we use
-          // the keyword "none" to track this.
           if (!finalValue) {
             return 'none';
           }
@@ -486,12 +477,6 @@ export class MediaRequest {
     }
   }
 
-  /**
-   * Notification for approval
-   *
-   * We only check on AfterUpdate as to not trigger this for
-   * auto approved content
-   */
   @AfterUpdate()
   public async notifyApprovedOrDeclined(autoApproved = false): Promise<void> {
     if (

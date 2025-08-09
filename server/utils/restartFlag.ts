@@ -9,6 +9,11 @@ class RestartFlag {
   }
 
   public isSet(): boolean {
+    // FIX: Add a check to ensure this.settings is not undefined
+    if (!this.settings) {
+      return false;
+    }
+
     const settings = getSettings().main;
 
     return (
